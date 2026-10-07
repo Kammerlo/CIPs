@@ -1,7 +1,7 @@
 {
     "$schema": "http://json-schema.org/draft-07/schema#",
     "title": "Cardano KERI Accountability Metadata",
-    "description": "Metadata schema for embedding KERI identifiers and authentication events (AUTH_BEGIN, ATTEST, AUTH_END) within Cardano transactions.",
+    "description": "Metadata schema for embedding KERI identifiers and authentication events (AUTH_BEGIN, ATTEST, ATTEST_TX, CLAIM_TX, AUTH_END) within Cardano transactions.",
     "type": "object",
     "patternProperties": {
         "^[0-9]+$": {
@@ -64,6 +64,90 @@
                         "i",
                         "d",
                         "s"
+                    ],
+                    "additionalProperties": false
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "t": {
+                            "const": "ATTEST_TX"
+                        },
+                        "i": {
+                            "type": "string",
+                            "description": "Autonomic Identifier (AID) of the signer."
+                        },
+                        "s": {
+                            "type": "string",
+                            "pattern": "^[0-9A-Fa-f]+$",
+                            "description": "Optional hex-encoded sequence number hint of the KEL event anchoring the transaction seal."
+                        },
+                        "v": {
+                            "type": "object",
+                            "description": "CIP version.",
+                            "properties": {
+                                "v": {
+                                    "type": "string",
+                                    "description": "CIP version, 1.1 or later."
+                                }
+                            },
+                            "required": [
+                                "v"
+                            ],
+                            "additionalProperties": false
+                        }
+                    },
+                    "required": [
+                        "t",
+                        "i",
+                        "v"
+                    ],
+                    "additionalProperties": false
+                },
+                {
+                    "type": "object",
+                    "properties": {
+                        "t": {
+                            "const": "CLAIM_TX"
+                        },
+                        "i": {
+                            "type": "string",
+                            "description": "Autonomic Identifier (AID) of the signer."
+                        },
+                        "r": {
+                            "type": "array",
+                            "minItems": 1,
+                            "description": "Transaction IDs of the claimed transactions.",
+                            "items": {
+                                "type": "string",
+                                "pattern": "^[0-9a-f]{64}$"
+                            }
+                        },
+                        "s": {
+                            "type": "string",
+                            "pattern": "^[0-9A-Fa-f]+$",
+                            "description": "Optional hex-encoded sequence number hint of the KEL event anchoring the transaction seal."
+                        },
+                        "v": {
+                            "type": "object",
+                            "description": "CIP version.",
+                            "properties": {
+                                "v": {
+                                    "type": "string",
+                                    "description": "CIP version, 1.1 or later."
+                                }
+                            },
+                            "required": [
+                                "v"
+                            ],
+                            "additionalProperties": false
+                        }
+                    },
+                    "required": [
+                        "t",
+                        "i",
+                        "r",
+                        "v"
                     ],
                     "additionalProperties": false
                 },

@@ -5,7 +5,9 @@ cardano_keri_metadata = {
 auth_event = 
   auth_begin /
   auth_end /
-  attest
+  attest /
+  attest_tx /
+  claim_tx
 
 auth_begin = {
   t: "AUTH_BEGIN",
@@ -20,6 +22,27 @@ attest = {
   i: text,          ; AID of signer
   d: text,          ; Digest
   s: text           ; Hex-encoded sequence number
+}
+
+attest_tx = {
+  t: "ATTEST_TX",
+  i: text,          ; AID of signer
+  ? s: text,        ; Hex-encoded sequence number hint
+  v: cip_version
+}
+
+claim_tx = {
+  t: "CLAIM_TX",
+  i: text,          ; AID of signer
+  r: [+ tx_id],     ; Claimed transactions
+  ? s: text,        ; Hex-encoded sequence number hint
+  v: cip_version
+}
+
+tx_id = text .regexp "[0-9a-f]{64}"  ; Lowercase hex transaction ID
+
+cip_version = {
+  v: text           ; CIP version, "1.1" or later
 }
 
 auth_end = {
