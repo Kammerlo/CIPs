@@ -7,10 +7,11 @@ Authors:
     - Fergal O'Connor <fergal.oconnor@cardanofoundation.org>
     - Thomas Kammerlocher <thomas.kammerlocher@cardanofoundation.org>
 Implementors:
-  - Reeve Technology <https://cardanofoundation.org/reeve>
-  - Veridian <https://veridian.id>
+    - Reeve Technology <https://cardanofoundation.org/reeve>
+    - Veridian <https://veridian.id>
 Discussions:
     - Original PR: https://github.com/cardano-foundation/CIPs/pull/1113
+    - Version 1.1: https://github.com/cardano-foundation/CIPs/pull/1287
 Created: 2025-11-05
 License: CC-BY-4.0
 ---
