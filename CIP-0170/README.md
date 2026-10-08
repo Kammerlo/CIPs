@@ -48,13 +48,13 @@ The specification is versioned as `major.minor`; the current version is `1.1`. V
 | Version | Adds |
 |---|---|
 | `1.0` | `AUTH_BEGIN`, `ATTEST` and `AUTH_END` records. |
-| `1.1` | [`ATTEST_TX`](#attesting-a-transaction-attest_tx) records, including several signers of one transaction, and [`CLAIM_TX`](#claiming-an-existing-transaction-claim_tx) records. |
+| `1.1` | [`ATTEST_TX`](#attesting-a-transaction-attest_tx) records, including several signers of one transaction, [`CLAIM_TX`](#claiming-an-existing-transaction-claim_tx) records, and the [metadata seal](#metadata-seal) as an alternative KEL anchor for `ATTEST` records. |
 
 A minor version only adds record types or optional forms. A record that is valid under an earlier minor version remains valid and keeps its meaning. A change that alters the meaning of existing records requires a new major version.
 
 Every record carries the version it follows in `v.v`. Records of a type introduced in version `1.1` MUST carry `v`. A record of a version `1.0` type without `v` is interpreted as version `1.0`. `AUTH_BEGIN` and `AUTH_END` records additionally carry the minimum KERI version in `v.k` and the minimum ACDC version in `v.a`.
 
-Indexers SHOULD ignore label `170` records with a value of `t` they do not support. Indexers implementing version `1.0` may not do so, and may reject records introduced in version `1.1`.
+Indexers SHOULD ignore label `170` records with a value of `t` they do not support. Indexers implementing version `1.0` may not do so, and may reject records introduced in version `1.1`. Verifiers implementing version `1.0` report `ATTEST` records anchored with a metadata seal as unverified.
 
 The CDDL ([`version_1.cddl`](version_1.cddl)) and JSON schema ([`version_1.json`](version_1.json)) define all records of major version 1. They constrain label `170` only; other labels in the same transaction may hold any metadata. Byte strings in the JSON schema use the 0x-prefixed hexadecimal form of the `cardano-cli` no-schema JSON mapping.
 
@@ -134,10 +134,10 @@ To create a persistent signature over data with KERI, signers can anchor a diges
  The relevant data recorded for each event includes:
 - **t** — A transaction type of `ATTEST` is to create a verifiable record.
 - **i** — The identifier of the signer in the CESR qb64 variant.
-- **d** — The digest of the attested data in the CESR qb64 variant. If the transaction carries application metadata under another label, the digest MUST be computed over the CBOR encoding of the metadatum value at that label, byte-identical to the bytes in the transaction's auxiliary data — see [Digest computation](#digest-computation). The digest algorithm is identified by the CESR derivation code; implementations MUST support Blake3-256 (code `E`) and SHOULD use it when creating attestations. The value of `d` MUST be identical to the seal anchored in the KEL event at sequence number `s`.
+- **d** — The digest of the attested data in the CESR qb64 variant. If the transaction carries application metadata under another label, the digest MUST be computed over the CBOR encoding of the metadatum value at that label, byte-identical to the bytes in the transaction's auxiliary data — see [Digest computation](#digest-computation). The digest algorithm is identified by the CESR derivation code; implementations MUST support Blake3-256 (code `E`) and SHOULD use it when creating attestations. The KEL event at sequence number `s` MUST anchor either `d` itself or, from version `1.1`, the [metadata seal](#metadata-seal) computed from `d` and the attested label.
 - **s** — The sequence number of the KERI event, encoded as a hex string.
 - **v** - Version of the CIP. KERI and ACDC version isn't needed here.
-If the KEL of identifier `i` contains an event at sequence number `s` which has a seal value of `{ d: "{{digest}}" }`, it serves as cryptographically verifiable proof that the data was effectively signed by the controller.
+If the KEL of identifier `i` contains an event at sequence number `s` which has a seal value of `{ d: "{{digest}}" }`, or of `{ d: "{{metadataSeal}}" }` for a record of version `1.1` or later whose `d` covers a metadatum in the same transaction, it serves as cryptographically verifiable proof that the data was effectively signed by the controller.
 
 A reference to this event in a metadata transaction is structured as follows:
 ```JSON
@@ -154,7 +154,7 @@ A reference to this event in a metadata transaction is structured as follows:
     "YYYY": "{{someApplicationMetadata}}"
 }
 ```
-Such transactions are only considered valid if the digest value is correct, and can be found anchored in the KEL of the controller at the given sequence number.
+Such transactions are only considered valid if the digest value is correct, and the digest, or for a record of version `1.1` or later the metadata seal computed from it and the attested label, can be found anchored in the KEL of the controller at the given sequence number.
 
 #### Digest computation
 
@@ -163,7 +163,7 @@ What `d` refers to depends on whether the transaction carries application metada
 - **If the transaction contains application metadata under another label** (the *attested label*, `YYYY` above), `d` MUST be the digest of the CBOR encoding of the metadatum **value** at that label, byte-identical to the bytes present in the transaction's auxiliary data. It is computed over the value only — not the label/value pair, not the whole metadata map, and not any JSON or other re-serialised representation. Implementations SHOULD digest the bytes that will be (or were) submitted rather than an independent re-serialisation: CBOR allows several encodings of the same structure (map key order, integer widths, indefinite-length items) and only the on-chain bytes are authoritative. If a use case places application metadata under more than one label, the use case MUST define which label is attested; a single application label per `ATTEST` transaction is RECOMMENDED.
 - **If the transaction contains no application metadata**, the data referred to by `d` is defined by the use case (for example an off-chain document or a data set published elsewhere). The use case MUST specify how a verifier obtains that data and which encoding is digested.
 
-The digest is computed with the algorithm identified by the CESR derivation code (Blake3-256, code `E`, RECOMMENDED), encoded as a CESR primitive in qb64 form, placed in `d` and anchored as the seal of the signer's KEL event. Because `d` covers only the attested data and not label `170` itself, there is no circularity: the payload is serialised and digested first, then the `170` entry is added.
+The digest is computed with the algorithm identified by the CESR derivation code (Blake3-256, code `E`, RECOMMENDED), encoded as a CESR primitive in qb64 form, placed in `d`, and anchored as the seal of the signer's KEL event, either directly or, for a record of version `1.1` or later, through the [metadata seal](#metadata-seal) computed from it. Because `d` covers only the attested data and not label `170` itself, there is no circularity: the payload is serialised and digested first, then the `170` entry is added.
 
 Because the KEL anchor is created before the transaction exists and cannot be retracted once written, implementations SHOULD extract the encoded metadatum bytes from the built transaction and confirm they digest to `d` before submitting. If they differ, the attestation is not verifiable and can only be corrected by anchoring a new event and publishing a new transaction.
 
@@ -197,6 +197,48 @@ a368697373756564417474323032362d30382d32305430383a30303a30305a6d736368656d615665
 ```
 
 and digests to `EIswjSN1u14y36RGf6TKm-z65R0rMMLjQHnjXofImTmZ`. A verifier that arrives at this value has read a representation other than the on-chain bytes.
+
+#### Metadata seal
+
+Some KERI wallets can anchor only the SAID of a JSON object, for example when they anchor through a remote signing request; they cannot anchor a raw digest. Such a signer anchors a *metadata seal* instead of `d`. The metadata seal is the SAID of the following JSON object:
+
+```JSON
+{ "d": "{{SAID}}", "t": "cardano-metadata-attest", "l": {{attestedLabel}}, "digest": "{{digest}}" }
+```
+
+- **d** — The SAID of this object.
+- **t** — The constant `cardano-metadata-attest`. It ensures that only an anchor made for the purpose of attesting metadata counts as one. A digest anchored under any other object shape MUST NOT be accepted as a metadata seal.
+- **l** — The attested label, as a JSON integer in decimal notation without sign, exponent, fraction or leading zeros. Implementations MUST serialise it exactly for the full range of metadata labels (unsigned 64-bit integers), including values above 2<sup>53</sup>.
+- **digest** — The value of `d` of the `ATTEST` record.
+
+The SAID is computed as for the [transaction seal](#transaction-seal): `d` is set to a placeholder of 44 `#` characters, the object is serialised as JSON in UTF-8 without any whitespace with the keys in the order `d`, `t`, `l`, `digest`, the Blake3-256 digest of these bytes is encoded as a CESR primitive in the qb64 variant with derivation code `E`, and the result replaces the placeholder. The object is fully determined by the record and the attested label, so it is not published: verifiers recompute it.
+
+The metadata seal is defined only for records whose `d` covers a metadatum at an attested label in the same transaction. The `ATTEST` record itself is unchanged: `d` remains the digest of the metadatum, so the same record verifies with either anchor. A record whose KEL anchor is a metadata seal MUST carry `v` with version `1.1` or later.
+
+If the metadata seal is anchored by a KERI wallet through a remote signing request, the request MUST include the attested label and the CBOR bytes of the metadatum value. The KERI wallet MUST recompute `digest` from these bytes and the metadata seal from the object, instead of trusting values supplied with the request, and SHOULD show its controller the decoded metadatum and the label before anchoring.
+
+Verifiers implementing version `1.1` MUST accept, for a record of version `1.1` or later whose `d` covers a metadatum in the same transaction, an event at sequence number `s` that anchors either `{ "d": "{{digest}}" }` or `{ "d": "{{metadataSeal}}" }`. The metadata seal is computed with `l` set to the attested label, as defined in [Digest computation](#digest-computation). A verifier that does not know the use case MAY take each label other than `170` whose metadatum value digests to `d`; it MUST report the label for which the seal matched, and `i` MUST have authority for that label. For a record of an earlier version, or a record whose `d` covers data outside the transaction, only `{ "d": "{{digest}}" }` is accepted. Verifiers match on the `d` field of an anchored seal entry.
+
+Implementation requirements for the metadata seal:
+
+| Component | Required |
+|---|---|
+| Signers and KERI wallets | Anchor the metadata seal only for records of version `1.1` or later. When anchoring through a remote signing request, receive the attested label and the metadatum bytes, recompute the digest and the seal, SHOULD show the metadatum and the label, anchor `{ "d": "{{metadataSeal}}" }`. |
+| Indexers and verifiers | For records of version `1.1` or later, compute the metadata seal from `d` and the attested label, accept either anchor at `s`, and report the label for which the seal matched. |
+
+##### Metadata seal test vector
+
+For the metadatum of the [digest test vector](#test-vector) at label `1447`, with `d` = `EOpMIJmAaiP4cZgmDkg8rVtl8YU4dDYf_gxrK2sNdfOR`, the serialised object with the placeholder is
+
+```
+{"d":"############################################","t":"cardano-metadata-attest","l":1447,"digest":"EOpMIJmAaiP4cZgmDkg8rVtl8YU4dDYf_gxrK2sNdfOR"}
+```
+
+and the metadata seal is
+
+```
+ELaRZ34Ynl9ohjeUXQmkl9ypwEGozin-L8P43gA-IDX7
+```
 
 ### Revoking of signing authority
 Signing authority may be removed after a period of time by revoking the relevant credential and publishing this revocation on-chain. As such, the validity of transactions associated with that credential chain are for all valid `ATTEST` transactions between issuance (`AUTH_BEGIN`) and revocation (`AUTH_END`).
@@ -650,6 +692,8 @@ The metadata-based approach was chosen for its simplicity and flexibility:
 **Why transaction attestations carry no digest:** a transaction cannot contain a digest of its own transaction ID, because the transaction ID covers the auxiliary data hash. The transaction ID is however available to every verifier from the chain, so the record only needs to name the signer, and the KEL carries the seal. The witness set is not part of the transaction ID, so the seal can be anchored after the transaction is signed and before it is submitted. A digest of the transaction body without the auxiliary data hash was considered, but it would require verifiers to remove a field from the original CBOR bytes, with the same encoding pitfalls described in [Digest computation](#digest-computation).
 
 **Why the transaction seal has a purpose tag:** a controller may anchor a transaction ID for reasons other than attesting it, for example to record a transaction it observed. KERI events carry no trusted timestamps, so the order of the anchor and the transaction cannot be used to tell these apart. Without a purpose tag, such an anchor would turn any transaction naming the signer into an attested one. The network magic prevents an attestation on a test network from counting on mainnet.
+
+**Why `ATTEST` accepts a metadata seal:** wallets that anchor through remote signing requests accept only self-addressing objects and anchor their SAID, so they cannot anchor a raw digest. The metadata seal applies the transaction-seal design to `ATTEST`: it is deterministic, carries a purpose tag so that no unrelated anchor counts, and includes the attested label so that an anchor for one label cannot be presented for another. The record keeps `d` as the plain digest, so verifiers check the metadata the same way for both anchors, and signers that can anchor raw digests are not affected. The seal carries no network magic, consistent with the digest form, which is not bound to a network either.
 
 **Why the KERI wallet must see the transaction:** if the KERI wallet only receives a transaction ID, the attestation states that the controller approved a hash it could not interpret. An attacker controlling the transaction builder could then obtain attestations for transactions the controller would not approve.
 

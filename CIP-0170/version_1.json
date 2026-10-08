@@ -138,7 +138,7 @@
                 },
                 "d": {
                     "type": "string",
-                    "description": "Digest of the attested data, CESR qb64."
+                    "description": "Digest of the attested data, CESR qb64. The KEL event at s anchors this digest or, from version 1.1, the metadata seal computed from it."
                 },
                 "s": {
                     "type": "string",
@@ -147,7 +147,7 @@
                 },
                 "v": {
                     "$ref": "#/definitions/cipVersion",
-                    "description": "Absent means version 1.0."
+                    "description": "Absent means version 1.0. Must be 1.1 or later if the KEL anchor is a metadata seal."
                 }
             },
             "required": [
