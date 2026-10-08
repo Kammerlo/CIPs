@@ -41,6 +41,23 @@ The credentials used in the KERI ecosystem are known as ACDCs, or [Authentic Cha
 > [!NOTE]
 > The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in BCP 14 [RFC2119](https://www.rfc-editor.org/rfc/rfc2119) [RFC8174](https://www.rfc-editor.org/rfc/rfc8174) when, and only when, they appear in all capitals, as shown here.
 
+### Versioning
+
+The specification is versioned as `major.minor`; the current version is `1.1`. Versions are compared numerically, part by part (`1.10` is later than `1.9`).
+
+| Version | Adds |
+|---|---|
+| `1.0` | `AUTH_BEGIN`, `ATTEST` and `AUTH_END` records. |
+| `1.1` | [`ATTEST_TX`](#attesting-a-transaction-attest_tx) records, including several signers of one transaction, and [`CLAIM_TX`](#claiming-an-existing-transaction-claim_tx) records. |
+
+A minor version only adds record types or optional forms. A record that is valid under an earlier minor version remains valid and keeps its meaning. A change that alters the meaning of existing records requires a new major version.
+
+Every record carries the version it follows in `v.v`. Records of a type introduced in version `1.1` MUST carry `v`. A record of a version `1.0` type without `v` is interpreted as version `1.0`. `AUTH_BEGIN` and `AUTH_END` records additionally carry the minimum KERI version in `v.k` and the minimum ACDC version in `v.a`.
+
+Indexers SHOULD ignore label `170` records with a value of `t` they do not support. Indexers implementing version `1.0` may not do so, and may reject records introduced in version `1.1`.
+
+The CDDL ([`version_1.cddl`](version_1.cddl)) and JSON schema ([`version_1.json`](version_1.json)) define all records of major version 1. They constrain label `170` only; other labels in the same transaction may hold any metadata. Byte strings in the JSON schema use the 0x-prefixed hexadecimal form of the `cardano-cli` no-schema JSON mapping.
+
 ### Key Event Log Discovery
 In order to verify the validity of credential chains and metadata transactions, Key Event Logs, or KELs, for all issuing and holding identifiers in the credential chain must be made available to a verifier. KELs may live off-chain for interoperability and scalability reasons, so this CIP does not make assumptions on which medium the KELs are published.
 
@@ -83,7 +100,7 @@ Before attesting to any transactions, the relevant [credential chain](#credentia
 - **t** — A transaction type of `AUTH_BEGIN` is used to establish a signer’s authority using a credential chain.
 - **i** — The identifier of the signer in the CESR qb64 variant. This MUST match the issuee of the leaf credential in the chain.
 - **s** — The schema identifier of the leaf credential in the chain in the CESR qb64 variant. This MUST match the schema of the [leaf credential](#identifying-a-credential-chain-type) in the chain.
-- **c** — The byte-stream of the credential chain in the CESR qb2 or qb64b variant, for brevity.
+- **c** — The byte-stream of the credential chain in the CESR qb2 or qb64b variant, for brevity. A metadata byte string holds at most 64 bytes, so a longer stream is split into consecutive chunks of at most 64 bytes, stored in order as a list. Verifiers concatenate the chunks.
 - **v** - Version of the CIP and minimum version of KERI and ACDC to ensure compatibility.
 - **m** —  An optional metadata block used to simplify indexing for a particular use-case. For example, the LEI of a legal entity could be contained here.
 
@@ -188,7 +205,7 @@ The following attributes are used:
 - **t** — A transaction type of `AUTH_END` is used to remove a signer’s authority with revocation registry events.
 - **i** — The identifier of the signer in the CESR qb64 variant. This MUST match the issuee of the leaf credential in the chain.
 - **s** — The schema identifier of the leaf credential in the chain in the CESR qb64 variant. This MUST match the schema of the leaf credential in the chain.
-- **c** — The byte-stream of the revocation registry events in the CESR qb2 or qb64b variant, for brevity.
+- **c** — The byte-stream of the revocation registry events in the CESR qb2 or qb64b variant, for brevity. A longer stream is split into chunks of at most 64 bytes, as for `AUTH_BEGIN`.
 - **v** - Version of the CIP and minimum version of KERI and ACDC to ensure compatibility.
 - **m** — An optional metadata block used to simplify indexing for a particular use-case. For example, the LEI of a legal entity could be contained here.
 
@@ -222,9 +239,7 @@ If the successful parsing of the revocation events results in a credential chain
 
 Both follow the [identity lifecycle](#visualized-identity-lifecycle): authority is established with `AUTH_BEGIN`, removed with `AUTH_END`, and evaluated at the position in the chain of the transaction that carries the `ATTEST_TX` or `CLAIM_TX` record.
 
-`ATTEST_TX` and `CLAIM_TX` are introduced in version `1.1` of this CIP. Versions are of the form `major.minor` and are compared numerically, part by part (`1.10` is later than `1.9`).
-
-Indexers SHOULD ignore label `170` records with a value of `t` they do not support. Indexers implementing version `1.0` may not do so, and may reject these records.
+`ATTEST_TX` and `CLAIM_TX` are introduced in version `1.1` of this CIP; see [Versioning](#versioning).
 
 #### Authority for transaction attestations
 
@@ -276,8 +291,8 @@ For the same transaction ID on preprod (`"n":1`), the transaction seal is `EIe4U
 An `ATTEST_TX` record is placed in the metadata of the transaction it attests. The following attributes are used:
 
 - **t** — A transaction type of `ATTEST_TX`.
-- **i** — The identifier of the signer in the CESR qb64 variant.
-- **s** — OPTIONAL. The sequence number of the KEL event expected to anchor the transaction seal, encoded as a hex string. It is a hint only. The event is created after the transaction ID is known, often by a separate KERI wallet, so the sequence number is not necessarily known when the metadata is written.
+- **i** — The identifier of the signer in the CESR qb64 variant, or a list of identifiers when several signers attest the transaction.
+- **s** — OPTIONAL. The sequence number of the KEL event expected to anchor the transaction seal, encoded as a hex string. It is a hint only. The event is created after the transaction ID is known, often by a separate KERI wallet, so the sequence number is not necessarily known when the metadata is written. If `i` is a list, `s` MUST be omitted or be a list of the same length, with the hint for each identifier at the same position.
 - **v** — Version of the CIP. MUST be `1.1` or later.
 
 ```JSON
@@ -293,6 +308,22 @@ An `ATTEST_TX` record is placed in the metadata of the transaction it attests. T
 }
 ```
 
+Several identifiers can attest the same transaction, for example the issuer and the custodian of an asset. `i` is then a list of their identifiers:
+
+```JSON
+{
+  "170": {
+    "t": "ATTEST_TX",
+    "i": ["{{aidOfIssuer}}", "{{aidOfCustodian}}"],
+    "v": {
+      "v": "1.1"
+    }
+  }
+}
+```
+
+The identifiers in the list MUST be distinct. Every signer anchors the same [transaction seal](#transaction-seal) in its own KEL, and each identifier is verified on its own.
+
 The transaction ID commits to the auxiliary data hash and therefore to all metadata in the transaction. An `ATTEST_TX` record therefore also binds the signer to any application metadata in the same transaction. Authority remains scoped per label: verifiers MUST NOT present the metadata at a label as attested by `i` unless `i` also has authority for that label. If it does, a separate `ATTEST` record for that metadata is not needed.
 
 ##### Construction of `ATTEST_TX`
@@ -300,20 +331,20 @@ The transaction ID commits to the auxiliary data hash and therefore to all metad
 1. Build the transaction including the `170` record. The transaction body MUST set an upper bound of its validity interval (TTL), so that a transaction that is not submitted cannot be included on chain later. This protects the signer and is not checked by verifiers.
 2. Compute the transaction ID from the exact body bytes that will be submitted. From this point on, the body MUST NOT change. Any change, including a different fee or a re-serialisation of the body by a wallet, results in a different transaction ID.
 3. Collect the vkey witnesses. Witnesses are not part of the transaction ID, so this does not change it. Implementations SHOULD collect them before anchoring, to avoid anchoring seals for transactions that are never signed.
-4. Anchor the transaction seal in the KEL of the signer. If the transaction is built by a party other than the KERI controller, for example when a KERI wallet is asked to anchor the seal through a remote signing request, the request MUST include the transaction body and the auxiliary data. The KERI wallet MUST recompute the transaction ID from the body instead of trusting a transaction ID supplied with the request, MUST check that the Blake2b-256 hash of the supplied auxiliary data equals the `auxiliary_data_hash` in the body, and SHOULD show its controller the effect of the transaction (outputs, minted assets, certificates, withdrawals) before anchoring.
-5. Confirm that the transaction ID of the final signed transaction equals the anchored `txHash`, and submit the transaction before its TTL expires.
+4. Anchor the transaction seal in the KEL of the signer, or of every signer if there are several. If the transaction is built by a party other than the KERI controller, for example when a KERI wallet is asked to anchor the seal through a remote signing request, the request MUST include the transaction body and the auxiliary data. The KERI wallet MUST recompute the transaction ID from the body instead of trusting a transaction ID supplied with the request, MUST check that the Blake2b-256 hash of the supplied auxiliary data equals the `auxiliary_data_hash` in the body, and SHOULD show its controller the effect of the transaction (outputs, minted assets, certificates, withdrawals) before anchoring.
+5. Confirm that the transaction ID of the final signed transaction equals the anchored `txHash`, and submit the transaction before its TTL expires. With several signers, the transaction SHOULD be submitted only after every signer has anchored the seal.
 
 A transaction seal anchored for a transaction that is never included on chain has no effect, since verification always starts from an on-chain transaction.
 
 ##### Verification of `ATTEST_TX`
 
-1. The transaction contains a `170` record with `t` equal to `ATTEST_TX`.
+1. The transaction contains a `170` record with `t` equal to `ATTEST_TX`. If `i` is a list, steps 2 to 5 apply to each identifier separately.
 2. `i` has authority at the position of the transaction in the chain, including the [authority for transaction attestations](#authority-for-transaction-attestations).
 3. The transaction ID is taken from the chain. Verifiers MUST NOT recompute it from a re-serialised transaction body.
 4. The [transaction seal](#transaction-seal) is computed from the network magic and the transaction ID.
 5. The KEL of `i` is retrieved and verified, and contains an event with anchored seals (`ixn`, `rot` or `drt`) that includes `{ "d": "{{transactionSeal}}" }`. If `s` is present, verifiers SHOULD check the event at that sequence number first. If the seal is not found there, verifiers MUST search the rest of the KEL.
 
-The record is valid if all steps succeed.
+The attestation by an identifier is valid if all steps succeed for it. With several identifiers, verifiers MUST report the result for each of them; the validity of one does not depend on the others.
 
 Verifiers MUST report the phase-2 validity flag (`is_valid`) of the transaction. A transaction with `is_valid` set to `false` is included on chain, but only its collateral is consumed. Verifiers MUST NOT present its other effects as having happened.
 
@@ -391,7 +422,7 @@ Naming a key in a claim links every transaction for which that key was required 
 | Credential issuers | Include label `170` in the labels of the leaf credential to grant the authority. | — |
 | Transaction builders and wallets | Expose the transaction ID before witnessing, keep the body unchanged after it, set a TTL, confirm the final transaction ID before submission. | Set `required_signers` and obtain the witnesses of the linking keys. |
 | KERI wallets | Accept remote signing requests that carry the transaction body and auxiliary data, recompute the transaction ID, show the effect of the transaction, anchor the transaction seal. | — |
-| Indexers and verifiers | Read the transaction ID and `is_valid` from the chain, compute the transaction seal, search the KEL, verify again when the KEL changes. | Resolve the inputs, collateral inputs, withdrawals, certificates, voting procedures and native scripts of claimed transactions to determine required keys, and report all claims. |
+| Indexers and verifiers | Read the transaction ID and `is_valid` from the chain, accept a single identifier or a list in `i`, compute the transaction seal, search each signer's KEL, verify again when the KEL changes. | Resolve the inputs, collateral inputs, withdrawals, certificates, voting procedures and native scripts of claimed transactions to determine required keys, and report all claims. |
 
 
 ### Reference Example - vLEI
@@ -623,6 +654,8 @@ The metadata-based approach was chosen for its simplicity and flexibility:
 **Why the KERI wallet must see the transaction:** if the KERI wallet only receives a transaction ID, the attestation states that the controller approved a hash it could not interpret. An attacker controlling the transaction builder could then obtain attestations for transactions the controller would not approve.
 
 **Why the KERI signing key is not used as a transaction witness:** the signer could add the hash of its current KERI signing key to `required_signers`, so that the ledger checks its signature. This was not chosen because it signs rather than anchors. A key that has been rotated out and is later compromised could then create attestations that appear to be historic. It also does not work for identifiers with multiple signing keys and thresholds, as used for vLEI group identifiers.
+
+**Why several signers share one record:** label `170` holds one value per transaction, so a second signer could otherwise only publish a later `CLAIM_TX`, which is a weaker statement. A list in `i` lets every party attest the transaction itself while label `170` keeps a single record. Each signer anchors the same seal, so adding a signer does not change what the others anchor.
 
 **Why `CLAIM_TX` relies on required keys:** anchoring the ID of an existing transaction can be done by anyone and does not prove any relation to it. Requiring the claim transaction to be signed by a key that the claimed transaction needed adds evidence from the side of the claimed transaction, and the ledger enforces it through `required_signers`. Keys that only appear in the witness set are excluded because anyone can add a witness to a transaction. Even so, a claim only proves cooperation at the time of the claim, which is why verifiers must present it distinctly from `ATTEST_TX`.
 
