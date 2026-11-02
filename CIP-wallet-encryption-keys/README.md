@@ -78,15 +78,6 @@ separate key, and a wallet that performs key agreement only, leaving the scheme 
   messages with a shared passphrase, which both parties must agree out of band, or a publicly
   known default. Encrypting to the recipient's public key removes the shared secret. This CIP does
   not specify that purpose yet, but its design must accommodate it.
-- **Sealed proofs of holdings (candidate purpose).** In the same [CIP-113] prototype, a holder can
-  seal a proof of their confidential holdings to one named reader, such as an auditor, knowing only
-  the reader's address, from which a directory resolves the reader's signed key claim. The reader
-  opens it with ECDH against their own key, the step this CIP provides. The prototype seals with
-  X25519, and its ephemeral key travels in an off-chain file rather than on chain. A specification
-  would therefore have to decide whether the purpose uses the `jubjub` profile or registers a
-  further one, and define `ref` for a file (for example its hash). Such a purpose could not be
-  scoped, so its consent wording must state that a grant opens every proof sealed to the user. This
-  CIP does not specify it yet.
 
 ### Stakeholders
 
@@ -195,6 +186,12 @@ PK  = sk · G
 `networkId` is the decimal value returned by [CIP-30] `getNetworkId()` (`0` for test networks,
 `1` for mainnet). Different purposes, profiles or networks therefore yield independent keys from
 the same path, and a key used on a test network is never the mainnet key.
+
+> **The tag changes when this CIP is numbered.** `cip????` is a placeholder. Once a number is
+> assigned, it is replaced by that number in decimal, without leading zeros (for example `cip1234`).
+> That changes every key. Keys derived with the placeholder are provisional: they are for
+> prototypes on test networks only, and anything sealed to them becomes unreadable when the
+> implementation moves to the numbered tag.
 
 - A key of this extension MUST be used only to compute ECDH shared secrets through this API.
   It MUST NOT be used to produce signatures or proofs whose form is `sk · P` for a point `P`
@@ -533,9 +530,8 @@ do not use the extension are unaffected.
 6. **Hardware wallets.** Role-`6` derivation is ordinary BIP32-Ed25519 work, but current Cardano
    hardware-wallet apps expose no on-device ECDH. Should the CIP define how a hardware wallet
    signals this, beyond `Refused`?
-7. **A second purpose.** Should an encrypted-message purpose for [CIP-83]-style metadata, or a
-   sealed-holdings purpose for [CIP-113] confidential notes, be specified in this CIP, or left to a
-   follow-up?
+7. **A second purpose.** Should an encrypted-message purpose for [CIP-83]-style metadata be
+   specified in this CIP, or left to a follow-up?
 
 ## Path to Active
 
