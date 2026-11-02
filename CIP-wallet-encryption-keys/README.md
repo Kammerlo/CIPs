@@ -571,6 +571,7 @@ do not use the extension are unaffected.
 - [CIP-30] — Cardano dApp-Wallet Web Bridge
 - [CIP-83] — Encrypted Transaction message/comment metadata
 - [CIP-95] — Web-Wallet Bridge - Conway ledger era
+- [Web-Wallet Bridge - Programmable Token Signing] — CIP-???? (PR #1312)
 - [CIP-0105] — Conway era Key Chains for HD Wallets
 - [CIP-113] — Programmable token-like assets
 - [CIP-1852] — HD (Hierarchy for Deterministic) Wallets for Cardano
@@ -654,6 +655,7 @@ This CIP is licensed under [CC-BY-4.0](https://creativecommons.org/licenses/by/4
 [CIP-30]: https://github.com/cardano-foundation/CIPs/tree/master/CIP-0030
 [CIP-83]: https://github.com/cardano-foundation/CIPs/tree/master/CIP-0083
 [CIP-95]: https://github.com/cardano-foundation/CIPs/tree/master/CIP-0095
+[Web-Wallet Bridge - Programmable Token Signing]: https://github.com/cardano-foundation/CIPs/pull/1312
 [CIP-0105]: https://github.com/cardano-foundation/CIPs/tree/master/CIP-0105
 [CIP-113]: https://github.com/cardano-foundation/CIPs/tree/master/CIP-0113
 [CIP-1852]: https://github.com/cardano-foundation/CIPs/tree/master/CIP-1852
