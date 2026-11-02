@@ -602,9 +602,6 @@ do not use the extension are unaffected.
                     L    = 64 ) mod ℓ
   ```
 
-  The 64-byte HKDF output is read as a **big-endian** unsigned integer before the reduction, as in
-  the Gero prototype.
-
   If the result is `0`, which happens with negligible probability, the wallet MUST answer
   `InternalError`.
 - **Validation of `Epk`.** The wallet MUST reject `Epk` unless all of the following hold, in this
