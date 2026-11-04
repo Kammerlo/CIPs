@@ -187,12 +187,6 @@ PK  = sk · G
 `1` for mainnet). Different purposes, profiles or networks therefore yield independent keys from
 the same path, and a key used on a test network is never the mainnet key.
 
-> **The tag changes when this CIP is numbered.** `cip????` is a placeholder. Once a number is
-> assigned, it is replaced by that number in decimal, without leading zeros (for example `cip1234`).
-> That changes every key. Keys derived with the placeholder are provisional: they are for
-> prototypes on test networks only, and anything sealed to them becomes unreadable when the
-> implementation moves to the numbered tag.
-
 - A key of this extension MUST be used only to compute ECDH shared secrets through this API.
   It MUST NOT be used to produce signatures or proofs whose form is `sk · P` for a point `P`
   derived from a message (for example BLS-style signatures), because `ecdh` would then act as a
@@ -406,13 +400,6 @@ encryption key *from* the stake key would be cryptographically sound, but this C
 Discovery is not an argument for the existing keys either. A stake public key is visible on chain
 only after its owner has signed with it, and a `jubjub` key cannot be read off it at all. A claim
 signed with [CIP-30] `signData` does that job (see [No export](#no-export-proof-of-possession-is-open)).
-
-### Why on layer 1
-
-Partner chains such as Midnight provide private computation on another chain. Lightweight cases
-are proportionate only on layer 1: a confidential amount in a Cardano-native token, a sealed note
-attached to a Cardano transaction, an encrypted document hash. These need one wallet primitive, not
-a bridge.
 
 ### Separate keys per purpose and per network
 
