@@ -6,7 +6,8 @@ Status: Proposed
 Authors:
     - Thomas Kammerlocher <thomas.kammerlocher@cardanofoundation.org>
     - Mateusz Czeladka <mateusz.czeladka@cardanofoundation.org>
-Implementors: []
+Implementors:
+    - Gero Wallet <https://gerowallet.io/>
 Discussions:
     - Original PR: https://github.com/cardano-foundation/CIPs/pull/1309
 Created: 2026-10-28
@@ -16,8 +17,8 @@ License: CC-BY-4.0
 ## Abstract
 
 [CIP-30] lets a dApp ask a wallet to **sign** with the user's keys, but not to use a key for
-**encryption**. Every asymmetric encryption scheme a dApp might use — confidential amounts,
-encrypted messages, encrypted metadata — needs the same step on the recipient's side: an
+**encryption**. Every asymmetric encryption scheme a dApp might use — encrypted amounts,
+messages or metadata — needs the same step on the recipient's side: an
 elliptic-curve Diffie–Hellman (ECDH) computation between a long-lived private key held by the
 recipient and an ephemeral public key chosen by the sender.
 
@@ -26,9 +27,9 @@ private key. A wallet derives, from its existing seed, a separate **encryption k
 registered purpose**. With an explicit, separate and revocable permission per purpose, a dApp can
 read the public key and ask the wallet to compute ECDH shared secrets against ephemeral keys
 taken from specific on-chain references. The wallet exposes no export call and no general
-decryption call. Purposes and curves are pluggable: this CIP registers the
-**confidential-viewing** purpose with the **Jubjub** curve, used today by confidential notes on
-[CIP-113] programmable tokens, and defines how further purposes and curves are added.
+decryption call. Purposes, curves and the encryption schemes that use a purpose are pluggable: this
+CIP registers the **viewing** purpose with the **Jubjub** curve, for schemes whose proofs run over
+BLS12-381, and defines how further purposes, curves and schemes are added.
 
 ## Motivation: Why is this CIP necessary?
 
@@ -68,12 +69,15 @@ separate key, and a wallet that performs key agreement only, leaving the scheme 
 
 ### Use cases
 
-- **Confidential transfers.** This proposal comes directly out of ongoing work on confidential
-  transfers for [CIP-113] programmable tokens. That work is a running prototype, being tested on
-  Preview and Preprod and reviewed by the community. Its confidential notes hide amounts on chain
-  and convey them to the recipient through ECDH with the recipient's **viewing key**. A dApp that
-  displays confidential balances or opens received notes needs this step. With the `jubjub`
-  profile, the viewing key reveals **incoming** amounts only. This purpose is specified here.
+- **Reading data encrypted to an account.** A scheme that hides values on chain, such as
+  amounts, conveys each one to its recipient through ECDH with the recipient's **viewing key**,
+  whether the scheme is built into the ledger or by a dApp. A dApp that displays such values, or
+  opens outputs encrypted to the account, needs this step. Whether the viewing key also reveals
+  values the account sent depends on the scheme. This purpose is specified here.
+- **Confidential token amounts.** Confidential [CIP-113] programmable tokens can hide each amount on
+  chain and seal it to the recipient's viewing key, with the token's issuer as a second reader of
+  every amount. Such a scheme runs today on Preprod with a reference dApp and Gero Wallet's
+  prototype of this extension.
 - **Encrypted messages and metadata (candidate purpose).** [CIP-83] encrypts transaction
   messages with a shared passphrase, which both parties must agree out of band, or a publicly
   known default. Encrypting to the recipient's public key removes the shared secret. This CIP does
@@ -81,8 +85,9 @@ separate key, and a wallet that performs key agreement only, leaving the scheme 
 
 ### Stakeholders
 
-Wallet implementors, dApp developers building on confidential assets or encrypted data, token
-issuers with compliance requirements, and the auditors those issuers or users designate.
+Wallet implementors, dApp developers building on encrypted data, issuers of confidential assets
+who read their holders' amounts as a second reader, and the users who read data encrypted to their
+accounts, or let a dApp they choose read it.
 
 Following the precedent of [CIP-95], this is an additive, namespaced [CIP-30] extension and
 changes no existing endpoint.
@@ -103,21 +108,31 @@ const api = await cardano.{walletName}.enable({ extensions: [{ cip: ???? }] });
 If the wallet enables it, `api.getExtensions()` MUST include `{ cip: ???? }` and the endpoints
 below MUST be available under the namespace `api.cip????`.
 
-> Until a CIP number is assigned, implementations MUST expose these endpoints only under
-> `api.experimental.encryptionKeys`, as required by [CIP-30]'s
+> **Provisional number.** Until a CIP number is assigned, implementations use the provisional
+> number `9001` in its place for activation and the namespace (the derivation tag keeps
+> `cip????`): a dApp calls `enable({ extensions: [{ cip: 9001 }] })`; a wallet lists
+> `{ cip: 9001 }` in `supportedExtensions`, reports it in `api.getExtensions()` when it enables it,
+> and serves the endpoints under `api.cip9001`. The CIP editors have not assigned `9001`; it is far
+> above the assigned numbers, so it collides with no published extension. This departs from
+> [CIP-30]'s
 > [Experimental API](https://github.com/cardano-foundation/CIPs/tree/master/CIP-0030#experimental-api),
-> and MUST NOT list them in `getExtensions()`.
+> which would place unnumbered endpoints under `api.experimental`, so that dApps and wallets
+> activate the extension the same way before and after numbering. Like the `cip????` in the
+> derivation tag, it changes once the CIP is numbered.
 
 Enabling the extension grants **nothing** by itself. Every endpoint is also gated by a
 [per-purpose permission](#permission).
 
 ### Concepts
 
-- **Purpose:** what a key is used for, e.g. `confidential-viewing`. Each purpose has its own key,
+- **Purpose:** what a key is used for, e.g. `viewing`. Each purpose has its own key,
   its own permission and its own rules (see [Purposes](#purposes)). Keys of different purposes
   are cryptographically independent, so granting one purpose never exposes another.
 - **Algorithm profile:** the group in which the key lives, the encodings, and the validation
   rules for ephemeral keys (see [Algorithm Profiles](#algorithm-profiles)).
+- **Scheme:** a concrete encryption format that uses a purpose's key: which outputs belong to it,
+  where `Epk` sits, what makes an output the account's, and what is derived from the shared secret
+  (see [Schemes](#schemes)). A purpose serves one or more registered schemes.
 - **Generation:** a hardened index that versions a key, so it can be rotated.
 
 ### Data Types
@@ -130,7 +145,7 @@ A lowercase hexadecimal string with no `0x` prefix.
 
 ```ts
 type KeySelector = {
-  purpose: string;        // a registered purpose, e.g. "confidential-viewing"
+  purpose: string;        // a registered purpose, e.g. "viewing"
   algorithm: string;      // an algorithm profile allowed for that purpose, e.g. "jubjub"
   accountIndex?: number;  // default 0
   generation?: number;    // default 0
@@ -149,8 +164,24 @@ type PublicKeyInfo = {
   accountIndex: number;
   generation: number;
   path: string;            // derivation path of the key material, e.g. "m/1852'/1815'/0'/6/0'"
+  capabilities: Capabilities;
+};
+
+type Capabilities = {
+  schemes: string[];       // registered scheme ids it scopes (and confirms, if confirming)
+  scoping: boolean;        // answers only for outputs it resolved and checked (see Scoping)
+  confirming: boolean;     // releases S only for outputs that open under S (see Confirming)
+  secondReader: boolean;   // a scoping wallet that accepts outputs sealed to the account as a second reader
+  maxBatch: number;        // the largest ecdhBatch it accepts: at least 512; 2^31 - 1 if it sets no cap
 };
 ```
+
+`capabilities` describes the wallet's behaviour for this purpose. It arrives with the public key, so
+after the purpose's permission is granted and before the dApp's first `ecdh` call; a dApp uses it to
+decide whether to pre-filter references, to expect `not-own-ref` after a prompt, and how to chunk.
+`secondReader` implies `confirming` (see [Confirming](#purpose-viewing)), and `confirming` implies `scoping`.
+`secondReader` is meaningful only with `scoping`: a wallet that does not scope answers for any `Epk` it
+is given, second-reader outputs included, and reports `schemes: []`.
 
 #### EcdhRequest
 
@@ -166,8 +197,9 @@ This lets the wallet scope its answers (see [Purposes](#purposes)) and makes req
 
 ### Key Derivation
 
-All encryption keys derive from one new [CIP-1852] role. Role `6` is reserved for encryption
-keys, in the same way [CIP-0105] added roles `3`–`5`:
+All encryption keys derive from one new [CIP-1852] role. Role `6` is reserved for the keys of this
+extension and for the keys of names other CIPs register under it (below), in the same way
+[CIP-0105] added roles `3`–`5`:
 
 ```
 m / 1852' / 1815' / account' / 6 / generation'
@@ -185,7 +217,17 @@ PK  = sk · G
 
 `networkId` is the decimal value returned by [CIP-30] `getNetworkId()` (`0` for test networks,
 `1` for mainnet). Different purposes, profiles or networks therefore yield independent keys from
-the same path, and a key used on a test network is never the mainnet key.
+the same path, and a key used on a test network is never the mainnet key. All test networks share
+`networkId` `0`, so Preview and Preprod share one key per purpose and profile.
+
+**Keys of other CIPs on the same material.** Another CIP MAY derive keys of its own from the role-`6`
+key material under a tag `cip????/<name>/…`, where `<name>` matches `[a-z0-9-]+` and is registered by
+that CIP in the same identifier space as purposes, listed under [Purposes](#purposes). A name is never
+both a purpose and such a registration, and neither contains `/`, so these tags never equal a
+purpose's tag and no two registrations collide. Such keys are **not** keys of this
+extension: the rules below for keys of this extension do not apply to them, and the CIP that
+registers the name defines their use, their export rules and their consent. It MUST derive them
+through HKDF with its own tag, so that they reveal nothing about any key of this extension.
 
 - A key of this extension MUST be used only to compute ECDH shared secrets through this API.
   It MUST NOT be used to produce signatures or proofs whose form is `sk · P` for a point `P`
@@ -217,57 +259,133 @@ this one.
 
 ### Purposes
 
-A purpose is registered by this CIP, or by a later CIP that extends it. Each registration MUST
-define:
+A purpose is registered by this CIP, or by a later CIP that extends it. Each purpose registration
+MUST define:
 
 1. the purpose identifier (lowercase, `[a-z0-9-]+`);
 2. the algorithm profiles allowed;
 3. the format of `EcdhRequest.ref` and any scoping rules;
 4. the effect-based wording of the consent prompt;
-5. what the scheme derives from `S`. The derivation MUST bind the context, at least `Epk` and the
-   reference `ref`, so that one shared secret never yields the same keystream in two places;
-6. the requirement on senders that `e` is fresh for every output and every transaction attempt,
-   including rebuilt or fee-bumped attempts of the same payment;
-7. what the recipient MUST verify after decrypting (for example that a decrypted amount opens
-   the on-chain commitment). A shared secret does not, by itself, make a ciphertext valid.
+5. whether the key may also read outputs the account does not own, as a second reader of data
+   sealed to it, and if so the consent wording that says it;
+6. that its schemes are registered by the CIPs that define them (see [Schemes](#schemes)).
 
 | Purpose | Status | Profiles | `ref` format |
 |---|---|---|---|
-| `confidential-viewing` | Specified below | `jubjub` | `"<txHash>#<outputIndex>"` of the output carrying the note |
+| `viewing` | Specified below | `jubjub` | `"<txHash>#<outputIndex>"` of the output that carries `Epk` |
 
-#### Purpose `confidential-viewing`
+A name registered for keys outside this extension (see [Key Derivation](#key-derivation)) is
+registered in the text of the CIP that uses it; a later CIP that registers a purpose or a name
+checks that the name is not taken.
 
-The key is the account's **viewing key** in a confidential-transfer scheme. A shared secret
-returned by `ecdh` opens one confidential output (note).
+#### Purpose `viewing`
 
-- **`ref`:** MUST match `^[0-9a-f]{64}#(0|[1-9][0-9]*)$` and name the output carrying the note.
+The key is the account's **viewing key**: a shared secret returned by `ecdh` opens one output
+whose data was encrypted to the account.
+
+- **`ref`:** MUST match `^[0-9a-f]{64}#(0|[1-9][0-9]*)$` and name the output that carries `Epk`.
 - **Consent wording**, in substance:
 
-  > «origin» is asking to read the confidential amounts in your account. It will not be able to
+  > «origin» is asking to read data that was encrypted to your account. It will not be able to
   > move funds. You can revoke this at any time.
 
-- **Derivation from `S`, sender rules and recipient verification:** as defined by the
-  confidential-transfer scheme in use. A dApp MUST verify that each decrypted amount and blinding
-  open the note's commitment, and MUST treat a note that fails as unreadable.
-- **Scope of disclosure:** the viewing key reveals the amounts of notes **sent to** the account.
-  Whether outgoing amounts can be recovered depends on the scheme, not on this extension.
-- **Scoping (MAY).** A wallet MAY answer only for notes owned by the connected account. A wallet
-  that scopes:
+  A wallet that confirms and serves second readers (see *Scope of disclosure* and *Confirming*)
+  knows that it answers for outputs the account does not own. Its wording MUST say so by its
+  effect: whose data the site can then read. A wallet that does not confirm MUST say the same
+  whenever a registered scheme of the purpose has a second reader, because its grant lets a site
+  read such outputs too: a wallet that does not scope answers for them directly, and one that
+  scopes answers for an output planted at the user's address that carries the same `Epk` (`S` does
+  not depend on the scheme). Only while no registered scheme of the purpose has a second reader may
+  a wallet that does not confirm use the wording above unchanged.
+
+- **Derivation from `S`, sender rules and recipient verification:** as the output's registered
+  scheme defines them (scheme items 4–6). A dApp MUST apply the scheme's recipient check (scheme
+  item 6), and MUST treat an output that fails it as unreadable.
+- **Scope of disclosure:** the viewing key reveals the data of outputs **sent to** the account.
+  A scheme MAY in addition seal an output's data to the viewing key of a second reader, an
+  auditor for example. That key then also reveals the data of such outputs, which its account
+  does not own.
+  Whether data the account sent can be recovered depends on the scheme, not on this extension.
+- **Scoping (MAY).** A wallet MAY answer only for outputs owned by the connected account or, if it confirms, sealed to it as a second reader. A wallet that scopes:
   - MUST resolve each `ref` from chain data it has verified itself (for example by checking that
-    the producing transaction hashes to the referenced id). It MUST NOT trust data supplied by
-    the dApp.
-  - MUST check that the output is owned by the connected account and carries exactly the given
-    `Epk`.
-  - MUST still answer for spent notes, so that history remains readable.
+    the producing transaction hashes to the referenced id), or from a transaction body the wallet
+    itself signed, provided the referenced transaction id is that body's hash. Such signed bodies
+    SHOULD expire after minutes, not days. Apart from such a body, which the wallet recorded itself
+    when it signed it, it MUST NOT trust data supplied by the dApp.
+  - MUST check that the output carries exactly the given `Epk` and is owned by the connected
+    account, or, in a wallet that confirms and serves second readers, is of a format the scheme
+    seals to a second reader.
+  - MUST still answer for spent outputs, so that history remains readable.
   - MUST perform these checks **before** prompting the user, and report failures with the `info`
     codes in [Errors](#errors).
   - SHOULD rate-limit the chain lookups each origin can trigger, since they cost the wallet work
     before any prompt.
 
-  Scoping narrows requests to keys that someone has placed at the user's address. **It does not
-  prevent a chosen-key request**, because anyone can create a note-shaped output at the user's
-  address carrying an `Epk` of their choosing. The [permission](#permission) remains the
-  security boundary.
+  Which outputs count as owned by the account, and where `Epk` sits in an output, are defined by
+  the output's registered scheme (scheme items 2 and 3). An output that is not an output of a
+  scheme the wallet supports counts as not owned (`not-own-ref`).
+
+  Scoping alone narrows requests to keys that someone has placed at the user's address. **It does
+  not prevent a chosen-key request**, because anyone can create an output shaped like the scheme's
+  at the user's address carrying an `Epk` of their choosing. Confirming, below, closes that case.
+  The [permission](#permission) remains the boundary for what an origin may read.
+- **Confirming (MAY).** A scoping wallet that implements the scheme's opening rule (scheme
+  item 7) MAY confirm each answer before releasing it. After computing `S`, and before it
+  returns, stores or counts anything, it checks that `S` opens the output as it was resolved for
+  scoping: the output's data decrypts under `S` and passes the scheme's check. A wallet that
+  confirms:
+  - MUST confirm every request of the call. If any output does not open, the whole call fails
+    with `not-own-ref` naming those requests. The wallet then releases nothing.
+  - MUST count an output whose format it cannot open as not owned, even when the format belongs
+    to a scheme it supports, and so refuses it before prompting like any other output that is
+    not owned.
+  - MAY answer for an output the account does not own, when the scheme seals that output's data
+    to the account's key as a second reader and `S` opens it in that role. Such an output MUST
+    pass the checks above before prompting. The wallet MUST NOT answer for it without
+    confirming, and only under a grant whose consent wording covers that case (see
+    [Permission](#permission)).
+  - MUST treat any error while confirming one request as that request not opening
+    (`not-own-ref`), never as `InternalError`.
+  - SHOULD make the work of the check independent of whether, and in which part, it fails.
+
+  Confirming needs the key, so it is the one check that comes after the user interaction of a
+  call. A wallet that confirms releases `S` only for an `Epk` whose output opens under `S`.
+  Under the conditions of scheme item 7, making such an output needs `S` itself, or the
+  opening of a genuine output on the same `Epk` that was sealed to the account in the same role.
+  So the value released is one of three: a value the requester could compute; the value the
+  wallet would release to the same origin for that genuine output's own reference; or a value
+  the genuine output's sender, who knew it, made derivable by giving out its opening. No caller
+  obtains `sk · P` for a point whose value nobody already holds.
+
+### Schemes
+
+A scheme is a concrete encryption format that uses a purpose's key. It is registered by a CIP that
+names the purpose it serves, and that CIP defines the scheme's data; this CIP defines only what a
+wallet needs from it. Each scheme registration MUST define:
+
+1. the scheme identifier (lowercase, `[a-z0-9-]+`) and the purpose it serves;
+2. which outputs belong to the scheme and where `Epk` sits in them;
+3. what makes an output owned by an account, for scoping;
+4. its roles (the owner and, optionally, a second reader) and, for each role, what it derives from
+   `S`. Each derivation MUST bind `Epk`, and each role's derivation MUST be domain-separated from
+   the others, so that an opening in one role gives none in another. With a fresh `e` (item 5), one
+   shared secret then never yields the same keystream in two places;
+5. the requirement on senders that `e` is fresh for every output and every transaction attempt,
+   including rebuilt or fee-bumped attempts of the same payment;
+6. a check the recipient MUST apply after decrypting, which rejects decrypted values not
+   produced for this output (for example, that they agree with what the chain holds). A shared
+   secret does not, by itself, make a ciphertext valid;
+7. if wallets may confirm (see [Purpose `viewing`](#purpose-viewing)), the opening rule a wallet
+   applies: the derivation from `S` of item 4 and the check of item 6. It MUST be such that an
+   output on a given `Epk`, created without `S`, passes it with negligible probability, unless
+   its author reuses the opening of a genuine output on that `Epk`.
+
+A wallet that confirms answers only for outputs of schemes whose opening rule it implements, and
+counts any other output as not owned. A wallet that only scopes may serve any scheme it supports
+through items 2 and 3.
+
+This CIP registers no scheme. Each scheme is registered in the CIP that defines it, which states
+the purpose it serves and answers the items above.
 
 ### Permission
 
@@ -279,8 +397,17 @@ Use of a purpose is a permission **separate from** `enable()` and from every oth
 - A grant MUST be scoped at least to (wallet, origin, purpose, account index, generation).
 - Grants MUST be listed where the user manages connected sites and MUST be revocable with
   immediate effect. Disconnecting an origin MUST revoke all its grants.
-- Before releasing any result, the wallet MUST re-check that the grant still holds and that the
-  active account is unchanged. If the active account changed, it MUST answer `AccountChange`.
+- Before releasing any result, the wallet MUST re-check that the grant still holds, still covers
+  every request of the call, and that the active account is unchanged. If the active account
+  changed, it MUST answer `AccountChange`.
+- A grant covers what its consent wording said, and the wallet MUST record with each grant which
+  wording it showed. Before prompting, the wallet determines from its scoping checks whether a
+  call holds a request of a kind that wording did not cover, for example an output the account
+  does not own. If so, the call's interaction MUST show the consent again with wording that
+  covers it, and the grant is replaced only if the call is answered. Calls whose requests the
+  recorded wording covers MAY continue under the earlier grant. This relies on senders using a
+  fresh `e` (scheme item 5). A sender who reuses `e` for an output to the account and for
+  an output sealed to it as second reader makes the answer for the first open the second.
 - A wallet SHOULD require user interaction (for example the spending password) for each `ecdh`
   or `ecdhBatch` call. A wallet that answers without per-call interaction MUST rate-limit each
   origin, and SHOULD ask again when an origin's usage changes markedly.
@@ -310,12 +437,14 @@ For each request, validates `ref` under the purpose and `Epk` under the profile,
 shared secret `S = sk · Epk`, encoded as defined by the profile.
 
 - The result has one entry per request, **in input order**.
-- The call is **all or nothing**: if any request fails validation or scoping, the whole call
-  fails and no secret is returned.
+- The call is **all or nothing**: if any request fails validation, scoping or confirming, the
+  whole call fails and no secret is returned. A failed call returns nothing, records no use of a
+  grant, and creates, replaces or upgrades no grant.
 - The wallet MAY cap the batch size. The cap MUST NOT be lower than 512 requests. A larger batch,
   or an empty one, is `InvalidRequest`.
-- The wallet's obligations end at `S`. It does not interpret ciphertexts, keystreams or
-  commitments.
+- The wallet's obligations end at `S`. It need not interpret ciphertexts, keystreams or any
+  other data of the scheme. A wallet that confirms (see [Purpose `viewing`](#purpose-viewing))
+  reads them only to decide whether to release `S`.
 
 ### Errors
 
@@ -326,7 +455,7 @@ This extension reuses [CIP-30]'s
 |---|---|---|
 | Origin not connected, wallet locked, permission declined or revoked, wallet cannot derive role `6`, account, purpose or profile not available, or the extension is not offered on this network | `Refused` (−3) | free text |
 | Malformed `KeySelector`; profile not allowed for the purpose; batch empty, not an array or over the wallet's cap; malformed `EcdhRequest` or `ref`; `Epk` fails the profile's validation rules | `InvalidRequest` (−1) | free text |
-| One or more references are not owned by the connected account, or do not carry the given `Epk` (scoping wallets only) | `InvalidRequest` (−1) | `not-own-ref:[i,…]` |
+| One or more references are neither owned by the connected account nor, in a wallet that serves second readers, sealed to it as one; do not carry the given `Epk`; or, in a wallet that confirms, do not open under `S` (scoping wallets only) | `InvalidRequest` (−1) | `not-own-ref:[i,…]` |
 | One or more references cannot be resolved yet (scoping wallets only) | `InvalidRequest` (−1) | `unresolved-ref:[i,…]` |
 | The active account changed during the request | `AccountChange` (−4) | free text |
 | Any other failure | `InternalError` (−2) | free text |
@@ -337,7 +466,9 @@ without spaces (e.g. `not-own-ref:[1,3]`). When both apply, only `not-own-ref` i
 dApps SHOULD validate every `Epk` and `ref` before calling, chunk large requests, and on
 `not-own-ref` or `unresolved-ref` mark the affected requests and retry the rest as one batch.
 dApps MUST NOT retry after `Refused`, and SHOULD NOT fall back to one call per request, since each
-call may cost the user a prompt.
+call may cost the user a prompt. A `not-own-ref` from a wallet that confirms arrives after the
+user interaction, so the refused call may already have cost one. dApps SHOULD remember
+references refused that way and not request them again.
 
 ### Versioning
 
@@ -353,8 +484,8 @@ independently.
 
 | Option | Scope | For | Against |
 |---|---|---|---|
-| A. Confidential viewing only | One key, one use | Smallest; already prototyped | Messaging or encrypted metadata would need another, overlapping CIP |
-| **B. General ECDH, one key per purpose** (chosen) | One API, keys and permissions separated by purpose | Serves confidential transfers now and other encryption uses later; a grant for one purpose never exposes another | Broader design; only one purpose has an implementer today |
+| A. One viewing purpose only | One key, one use | Smallest; already prototyped | Messaging or encrypted metadata would need another, overlapping CIP |
+| **B. General ECDH, one key per purpose** (chosen) | One API, keys and permissions separated by purpose | Serves reading encrypted data now and other encryption uses later; a grant for one purpose never exposes another | Broader design; only one purpose has an implementer today |
 | C. Wallet `encrypt` / `decrypt` | Wallet runs the whole scheme | Simplest for dApps | Ties wallets to each scheme's KDF and cipher; turns the wallet into a decryption oracle |
 
 Option B keeps the security properties of A and leaves room for the uses that motivated a
@@ -363,9 +494,9 @@ derivation-tag layer over the same API. The choice is open to change on feedback
 
 ### Why Jubjub only
 
-The curve is dictated by whatever must check the encryption on chain. Confidential notes on
-[CIP-113] prove, in a Groth16 circuit over BLS12-381 verified with Plutus's BLS12-381 built-ins,
-that each note is encrypted to its recipient's key. Jubjub is defined over BLS12-381's scalar
+The curve is dictated by whatever must check the encryption on chain. A scheme may prove, in a
+Groth16 circuit over BLS12-381 verified with Plutus's BLS12-381 built-ins, that each output is
+encrypted to its recipient's key. Jubjub is defined over BLS12-381's scalar
 field, so its arithmetic is native to that circuit and costs a few thousand constraints per
 operation. A curve over another field, such as ristretto255 over `2²⁵⁵ − 19`, would need
 emulated field arithmetic in the circuit, typically one to two orders of magnitude more
@@ -377,8 +508,10 @@ ledger change verifies it natively. A CIP extending this one can then register i
 The wallet computes the shared secret, not a plaintext. A `decrypt(ciphertext)` endpoint would
 tie wallets to one scheme's key derivation, framing and cipher, and would have to change whenever
 those do. ECDH between a long-lived key and a per-message ephemeral key is the primitive these
-schemes share. It also keeps the unit of disclosure small: a shared secret opens **one** note or
-message, whereas the key opens all of them.
+schemes share. It also keeps the unit of disclosure small: a shared secret opens **one** output
+or message, whereas the key opens all of them. A wallet that confirms reads the scheme's data
+only to decide whether to release the shared secret
+(see [Confirming before release](#confirming-before-release)). It still returns no plaintext.
 
 ### A separate role, not the payment or stake key
 
@@ -395,7 +528,10 @@ encryption key *from* the stake key would be cryptographically sound, but this C
    from the stake key has that key as its input, and a leaked stake key together with the
    account's public key reveals the account's private key.
 3. **One branch for the ecosystem.** [CIP-0105] added three roles for governance keys. One more
-   role covers every encryption use, rather than one ad hoc derivation per application.
+   role covers every encryption use, rather than one ad hoc derivation per application. Other
+   CIPs that need keys tied to the same account (a shielded pool's spend and proving keys, for example)
+   register a name under the same branch instead of claiming another role (see
+   [Key Derivation](#key-derivation)).
 
 Discovery is not an argument for the existing keys either. A stake public key is visible on chain
 only after its owner has signed with it, and a `jubjub` key cannot be read off it at all. A claim
@@ -404,19 +540,21 @@ signed with [CIP-30] `signData` does that job (see [No export](#no-export-proof-
 ### Separate keys per purpose and per network
 
 Reusing one key across purposes would let a site granted access to, for example, encrypted
-messages read the user's confidential amounts. Domain separation in the key mapping gives each
+messages read the data encrypted to the user. Domain separation in the key mapping gives each
 purpose an independent key from the same seed and path, so no new backup is needed. Separate
 permissions per purpose make the user's consent meaningful.
 
 The network is part of the tag for a similar reason. Without it, a test-network dApp could
-plant, at the user's test-network address, a note copied from a mainnet note sealed to that
-user, and have it opened after consent. With per-network keys, a mainnet note cannot be opened
+plant, at the user's test-network address, an output copied from a mainnet output sealed to that
+user, and have it opened after consent. With per-network keys, a mainnet output cannot be opened
 by the test-network key.
 
 ### Static-key ECDH oracle
 
-The API is, by design, an oracle that returns `sk · P` for points the caller chooses. Two
-consequences shape the specification:
+Without confirming, the API is an oracle that returns `sk · P` for points the caller chooses
+(scoping only requires that someone placed the point at the user's address). A wallet that
+confirms is not (see [Confirming before release](#confirming-before-release)). Two consequences
+shape the specification for the others:
 
 - **Key-usage restriction.** `sk · H(m)` is a BLS-style signature on `m`, so the key MUST NOT be
   used for any signature or proof of that form. Schnorr-style proofs, whose responses are scalars,
@@ -446,6 +584,32 @@ Requiring a `ref` with every `Epk` costs the dApp nothing, because it read `Epk`
 It lets wallets scope requests, reject garbage before prompting, and keep an audit trail. A
 bare-key form would make the endpoint a general-purpose ECDH oracle on the key.
 
+The scheme's derivation binds `Epk`, not `ref` (scheme item 4). A sender cannot bind the
+transaction hash in `ref`: the transaction body covers every output, its datum or datum hash and
+the auxiliary-data hash, so the hash is known only after the ciphertext is written. The output
+index could be bound, but it adds nothing once `e` is fresh for every output and attempt (scheme
+item 5): a fresh `e` already gives every output its own `Epk` and so its own keystream.
+
+### Confirming before release
+
+Scoping by ownership checks where an `Epk` sits, never who chose it. Anyone can pay an output
+shaped like the scheme's to the user's address with an `Epk` of their choosing, and a wallet that
+scopes by shape then answers `sk · Epk` for it. Confirming removes that case: the wallet releases
+`S` only where the output opens under `S`, which needs `S` or a genuine opening on the same `Epk`
+(see [Confirming](#purpose-viewing)). The static Diffie–Hellman attacks need answers on points
+whose answer nobody holds, and confirming gives none.
+
+It has two costs, which is why it is optional. The wallet must implement the opening rule of each
+scheme it serves, so a new output format needs wallet support before a dApp can ask for it. This
+is the coupling that [ECDH, not decryption](#ecdh-not-decryption) avoids for the result, accepted
+here for the release decision only. And because the check needs the key, an output planted at
+the user's address can cost the user one interaction for a call that is then refused.
+
+Confirming is also what makes a second reader safe to serve. A wallet that answered for outputs
+its account does not own without it would hand `sk · Epk` to anyone who can name an output. A
+wallet that knows no scheme's opening rule can still scope by ownership; the permission bounds
+what an origin reads either way.
+
 ### Point validation
 
 The `Epk` is the only place where a page can attack the **key** rather than the data. Jubjub has
@@ -455,7 +619,7 @@ small subgroup, or through an "invalid-curve" computation on the curve's quadrat
 checks in [Appendix A](#appendix-a-jubjub-profile) close both, before any key material is
 touched. This is acceptable for a cofactor curve here because the key is used for one operation
 only, on validated points, with no homomorphic algebra on attacker-supplied values. It also means
-a hostile page cannot cost the user a prompt.
+a hostile page cannot cost the user a prompt with an invalid key.
 
 ### Privacy
 
@@ -471,22 +635,11 @@ stake-key claim, and it rotates every purpose (see [Open Question 1](#open-quest
   key role together with wallet behaviour for it.
 - **[CIP-1852] / [CIP-0105]:** role `6` follows the way [CIP-0105] added governance roles. The
   derivation could be split into a separate companion CIP if wallet implementors prefer.
-- **[Native Confidential Transfers]** is a ledger-level proposal that depends on future hard
-  forks, so it is expected to follow this CIP by a long way. It also proposes role `6` for its
-  viewing key. This CIP generalises that role to encryption keys, so that a later ledger-level
-  scheme can register its curve as a profile here instead of claiming the role separately. If
-  that scheme needs other uses of its viewing key (deterministic ephemeral keys derived from it, a
-  Schnorr proof of possession, auditor export), which the key-usage and no-export rules of this CIP
-  forbid, it can instead keep its own key under role `6` with its own, domain-separated mapping,
-  outside this API. If the two proposals cannot share role `6`, this CIP moves to role `7` with no
-  other change.
 - **[CIP-83]** is a candidate for a future purpose that would replace shared passphrases with
   public-key encryption.
-- **Out of scope: signing [CIP-113] programmable inputs.** Spending confidential notes held as
-  [CIP-113] programmable tokens requires wallets to witness inputs at a programmable-logic script
-  address when the transaction names the wallet's stake key in `required_signers`. [CIP-30]
-  `signTx` with `partialSign` already permits this. Whether and under which safety conditions a
-  wallet *should* do it concerns every [CIP-113] token, so it belongs in a separate proposal.
+- **Out of scope: authorising spends.** Whether and when a wallet witnesses a transaction that
+  spends outputs encrypted to it is a question of the scheme's or the asset's signing rules, not of
+  key agreement.
 
 ### Backwards Compatibility
 
@@ -498,35 +651,45 @@ do not use the extension are unaffected.
 1. **Path level or tag for purposes.** Purposes are separated in the key mapping, not in the path.
    This keeps one generation index per account, so rotating one purpose's key rotates all of them.
    Should purposes instead get their own path level (`…/6/purpose'/generation'`)?
+   *Authors' current answer:* keep the tag. One generation index is simpler for wallets, and the
+   one registered purpose has no reason to rotate on its own; a purpose that needs independent
+   rotation can be given its own level by the CIP that registers it.
 2. **Proof of possession.** Should the extension offer an endpoint that proves the wallet holds
    `sk` for a published `PK`, such as a Schnorr proof with the account's stake credential bound
-   into the challenge? Or is that left to each scheme? For confidential notes, the scheme's
-   on-chain check that every note decrypts under its owner's signed key does not detect a key
-   nobody holds.
-3. **Compatibility with the prototype.** The Gero prototype derives the `jubjub` viewing key with
-   the tag `cip1233-poc/viewing-key/jubjub-v1`, with no network separation, and exposes it as
-   `api.experimental.confidentialViewing` with different method names. Its keys and test vectors
-   therefore differ from this specification. How should existing prototype users migrate?
-4. **Generation discovery.** dApps have no way to learn which generations an account has used.
+   into the challenge? Or is that left to each scheme? A scheme whose on-chain check proves only
+   that an output decrypts under the key its owner signed does not detect a key nobody holds.
+   *Authors' current answer:* leave it to each scheme. A scheme that needs it can prove
+   possession in its own way, for example inside its proof circuit, and a generic endpoint would
+   add a signing use of the key that this CIP otherwise forbids.
+3. **Generation discovery.** dApps have no way to learn which generations an account has used.
    Should `getPublicKey` report the latest generation, or should purposes define how generations
    are discovered (for example from on-chain registrations)?
-5. **Sender-side derivation.** The `jubjub` scheme lets the dApp choose the ephemeral scalar `e`.
+   *Authors' current answer:* the purpose or its schemes define it; this CIP adds no discovery
+   call.
+4. **Sender-side derivation.** The `jubjub` profile lets the dApp choose the ephemeral scalar `e`.
    A future scheme may require the sender to derive `e` from its own key, for example to make
    outgoing payments auditable, and a dApp cannot do that without the wallet. Should purposes be
-   able to define a sender-side endpoint? This does not block the `jubjub` profile.
-6. **Hardware wallets.** Role-`6` derivation is ordinary BIP32-Ed25519 work, but current Cardano
+   able to define a sender-side endpoint? *Authors' current answer:* yes, by a later CIP that
+   registers such a purpose; it does not block `viewing`.
+5. **Hardware wallets.** Role-`6` derivation is ordinary BIP32-Ed25519 work, but current Cardano
    hardware-wallet apps expose no on-device ECDH. Should the CIP define how a hardware wallet
-   signals this, beyond `Refused`?
-7. **A second purpose.** Should an encrypted-message purpose for [CIP-83]-style metadata be
-   specified in this CIP, or left to a follow-up?
+   signals this, beyond `Refused`? *Authors' current answer:* not yet; `Refused` is enough until
+   a device offers ECDH, and that device's CIP can add a signal.
+6. **A second purpose.** Should an encrypted-message purpose for [CIP-83]-style metadata be
+   specified in this CIP, or left to a follow-up? *Authors' current answer:* a follow-up, so that
+   this CIP stays reviewable; the purpose and scheme registries are built to take it.
+
+Two earlier questions are closed in this version: whether a scoping wallet must confirm (no; it
+reports `capabilities.confirming`, and only confirming wallets may serve second readers), and how
+a wallet that does not confirm words its consent when a scheme has a second reader (it says so by
+its effect, see [Purpose `viewing`](#purpose-viewing)).
 
 ## Path to Active
 
 ### Acceptance Criteria
 
-- [ ] A CIP number is assigned, and role `6` (or `7`, see
-      [Relationship to other proposals](#relationship-to-other-proposals)) is accepted into
-      [CIP-1852], either by this CIP or by a companion CIP.
+- [ ] A CIP number is assigned, and role `6` (or, if role `6` is taken, the next free role, with
+      no other change) is accepted into [CIP-1852], either by this CIP or by a companion CIP.
 - [ ] Open Questions 1 and 2 are resolved in the specification.
 - [ ] Conformance test vectors are published for every registered purpose and profile: key
       derivation for each network, `PK`, ECDH, and rejection of invalid `Epk` values.
@@ -536,16 +699,16 @@ do not use the extension are unaffected.
 
 ### Implementation Plan
 
-- [x] Prototype of the `confidential-viewing` purpose with the `jubjub` profile in Gero Wallet
-      (branch `feat/cip30-confidential-transfers`, under `api.experimental.confidentialViewing`;
-      Preview and Preprod only, mainnet refused).
-- [x] Reference dApp using the prototype to open confidential notes on [CIP-113] programmable
-      tokens, verified on Preprod.
-- [ ] Align the prototype with this specification (namespace, method names, derivation tag with
-      network separation, explicit on-curve check).
-- [ ] Reference implementations in TypeScript (`@noble/curves`) and Java (cardano-client-lib and
-      BouncyCastle) that
-      produce the conformance test vectors.
+- [x] Prototype of the `viewing` purpose with the `jubjub` profile in Gero Wallet (an
+      experimental branch; Preview and Preprod only, mainnet refused).
+- [x] Reference dApp using the prototype to open outputs encrypted to the account, verified on
+      Preprod.
+- [x] Align the prototype with this specification (namespace under the provisional number
+      `9001`, method names, derivation tag with network separation, explicit on-curve check).
+- [ ] Report `capabilities` from the prototype's `getPublicKey`.
+- [x] Reference implementations in TypeScript (`@noble/curves`) and Java (cardano-client-lib and
+      BouncyCastle) that produce the conformance test vectors
+      ([Appendix B](#appendix-b-test-vectors)).
 - [ ] Engage other wallet implementors via the wallet working groups and [CPS-0010].
 
 ## References
@@ -554,7 +717,6 @@ do not use the extension are unaffected.
 - [CIP-30] — Cardano dApp-Wallet Web Bridge
 - [CIP-83] — Encrypted Transaction message/comment metadata
 - [CIP-95] — Web-Wallet Bridge - Conway ledger era
-- [Web-Wallet Bridge - Programmable Token Signing] — CIP-???? (PR #1312)
 - [CIP-0105] — Conway era Key Chains for HD Wallets
 - [CIP-113] — Programmable token-like assets
 - [CIP-1852] — HD (Hierarchy for Deterministic) Wallets for Cardano
@@ -562,7 +724,6 @@ do not use the extension are unaffected.
 - [ePrint 2021/509] — On using the same key pair for Ed25519 and an X25519 based KEM
 - [ERC-5630] — New approach for encryption / decryption
 - [Issue #204] — `api.getSharedSecret` for CIP-30
-- [Native Confidential Transfers] — CIP-???? (PR #1233)
 - [RFC 2119] — Key words for use in RFCs to Indicate Requirement Levels
 - [RFC 5869] — HMAC-based Extract-and-Expand Key Derivation Function (HKDF)
 
@@ -572,8 +733,7 @@ do not use the extension are unaffected.
 
 - **Group:** the prime-order subgroup of Jubjub (order `ℓ`), the twisted Edwards curve
   `−x² + y² = 1 + d·x²·y²` defined over the BLS12-381 scalar field `p`, with cofactor 8. Used where
-  a circuit over that field must prove that data is encrypted to a given key, as in confidential
-  notes on [CIP-113].
+  a circuit over that field must prove that data is encrypted to a given key.
 - **Encoding:** points are represented by their `y` coordinate, 32 bytes big-endian. The sign of
   `x` is irrelevant to the result, since `sk·(±Epk)` has the same `y`.
 - **Mapping:** with HKDF-SHA256 as in [RFC 5869],
@@ -584,6 +744,10 @@ do not use the extension are unaffected.
                     info = tag,
                     L    = 64 ) mod ℓ
   ```
+
+  The key material is the 64-byte extended private key `kL‖kR` of the role-`6` node, without its
+  chain code. The 64 output bytes are read as a big-endian integer and reduced mod `ℓ`; `sk` is
+  then encoded as 32 bytes big-endian.
 
   If the result is `0`, which happens with negligible probability, the wallet MUST answer
   `InternalError`.
@@ -608,24 +772,22 @@ do not use the extension are unaffected.
   4958bdb21966982e16a13035ad4d72669106ee90f384a4a1ff0d2068eff496dd   order 8
   2a94e9a11036e51a1c98a7d25c54659ec2b6b5720c79b75d00f2df96100b6924   order 8
   ```
-- **Prototype test vectors (not conformance vectors).** These were produced by the Gero prototype
-  with the tag `cip1233-poc/viewing-key/jubjub-v1` and no network separation (see
-  [Open Question 3](#open-questions)). They demonstrate the derivation path and mapping, but do
-  not match the tag this specification defines. Conformance vectors are an acceptance criterion.
-  The seed phrases are the public BIP-39 test vectors.
 
-  | BIP-39 test phrase | Path | `PK.y` |
-  |---|---|---|
-  | `abandon … abandon about` | `m/1852'/1815'/0'/6/0'` | `68f88716c7eda97e5762dad7165caaf268907c8e6fea6cb525357547fa37c800` |
-  | same | `m/1852'/1815'/1'/6/0'` | `28deb51d0fc85bf61360fa2c3fb38fe807c4d8999ce18c67d3e8b5415a3fabf9` |
-  | `zoo … zoo wrong` | `m/1852'/1815'/0'/6/0'` | `41c6bb520c96ae265b72186b5ab7efb10ad97687018e07c1412f9797fc5dad17` |
-  | `abandon amount liar amount expire adjust cage candy arch gather drum buyer` | `m/1852'/1815'/0'/6/0'` | `67ca6733dba770de0b90689bb87df6dfe1f1c443e1eec4b2149b0cad6fdb1476` |
+### Appendix B: Test vectors
+
+[`test-vectors.json`](./test-vectors.json) holds conformance vectors for purpose
+`viewing`, profile `jubjub`: five vectors over two seed phrases, giving the key
+material, HKDF output, `sk`, `PK.y` and one ECDH result each, and covering networkId 0 and 1,
+account 1 and generation 1, plus nine encodings of `Epk` that a wallet MUST reject. The tag in every
+vector holds the placeholder `cip????`, so every value changes once this CIP is numbered. They are
+reproduced independently by a TypeScript implementation (`@noble/curves`), a Java one
+(BouncyCastle) and Gero Wallet's prototype. Confirming depends on each scheme's opening rule,
+so its vectors belong to the scheme, not to this CIP.
 
 ## Acknowledgements
 
-The API design and the `jubjub` prototype come from the confidential-notes proof of concept on
-[CIP-113] programmable tokens and its Gero Wallet integration. The security requirements draw on
-the review findings by Dr. Manvir Schneider on [Native Confidential Transfers].
+The API design and the `jubjub` prototype come from a proof of concept and its Gero Wallet
+integration. The security requirements draw on review findings by Dr. Manvir Schneider.
 
 ## Copyright
 
@@ -633,16 +795,14 @@ This CIP is licensed under [CC-BY-4.0](https://creativecommons.org/licenses/by/4
 
 [CIP-8]: https://github.com/cardano-foundation/CIPs/tree/master/CIP-0008
 [CIP-30]: https://github.com/cardano-foundation/CIPs/tree/master/CIP-0030
+[CIP-113]: https://github.com/cardano-foundation/CIPs/tree/master/CIP-0113
 [CIP-83]: https://github.com/cardano-foundation/CIPs/tree/master/CIP-0083
 [CIP-95]: https://github.com/cardano-foundation/CIPs/tree/master/CIP-0095
-[Web-Wallet Bridge - Programmable Token Signing]: https://github.com/cardano-foundation/CIPs/pull/1312
 [CIP-0105]: https://github.com/cardano-foundation/CIPs/tree/master/CIP-0105
-[CIP-113]: https://github.com/cardano-foundation/CIPs/tree/master/CIP-0113
 [CIP-1852]: https://github.com/cardano-foundation/CIPs/tree/master/CIP-1852
 [CPS-0010]: https://github.com/cardano-foundation/CIPs/tree/master/CPS-0010
 [ePrint 2021/509]: https://eprint.iacr.org/2021/509
 [ERC-5630]: https://eips.ethereum.org/EIPS/eip-5630
 [Issue #204]: https://github.com/cardano-foundation/CIPs/issues/204
-[Native Confidential Transfers]: https://github.com/cardano-foundation/CIPs/pull/1233
 [RFC 2119]: https://www.rfc-editor.org/rfc/rfc2119
 [RFC 5869]: https://www.rfc-editor.org/rfc/rfc5869
